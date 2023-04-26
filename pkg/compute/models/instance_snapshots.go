@@ -352,10 +352,9 @@ func (manager *SInstanceSnapshotManager) fillInstanceSnapshot(ctx context.Contex
 
 	guestSchedInput := guest.ToSchedDesc()
 
-	host, _ := guest.GetHost()
-	instanceSnapshot.ManagerId = host.ManagerId
-	zone, _ := host.GetZone()
-	instanceSnapshot.CloudregionId = zone.CloudregionId
+	instanceSnapshot.ManagerId = guest.ManagerId
+	region, _ := guest.getRegion()
+	instanceSnapshot.CloudregionId = region.Id
 
 	for i := 0; i < len(guestSchedInput.Disks); i++ {
 		guestSchedInput.Disks[i].ImageId = ""
@@ -442,10 +441,12 @@ func (manager *SInstanceSnapshotManager) CreateInstanceSnapshot(ctx context.Cont
 
 var HypervisorIndependentInstanceSnapshot = []string{
 	api.HYPERVISOR_KVM,
+	api.CLOUD_PROVIDER_BINGO_CLOUD,
 }
 
 var ProviderHasSubSnapshot = []string{
 	api.CLOUD_PROVIDER_ONECLOUD,
+	api.CLOUD_PROVIDER_BINGO_CLOUD,
 }
 
 func (self *SInstanceSnapshot) ToInstanceCreateInput(
@@ -510,6 +511,9 @@ func (self *SInstanceSnapshot) ToInstanceCreateInput(
 		}
 		sourceInput.EncryptKeyId = &self.EncryptKeyId
 	}
+
+	sourceInput.Hypervisor = serverConfig.Hypervisor
+	sourceInput.GuestImageID = self.ImageId
 
 	return sourceInput, nil
 }
@@ -673,12 +677,13 @@ func (manager *SInstanceSnapshotManager) newFromCloudInstanceSnapshot(ctx contex
 		lockman.LockClass(ctx, manager, "name")
 		defer lockman.ReleaseClass(ctx, manager, "name")
 
-		newName, err := db.GenerateName(ctx, manager, nil, extSnapshot.GetName())
-		if err == nil {
-			instanceSnapshot.Name = extSnapshot.GetName()
-		} else {
-			instanceSnapshot.Name = newName
-		}
+		instanceSnapshot.Name = extSnapshot.GetName()
+		//newName, err := db.GenerateName(ctx, manager, nil, extSnapshot.GetName())
+		//if err == nil {
+		//	instanceSnapshot.Name = extSnapshot.GetName()
+		//} else {
+		//	instanceSnapshot.Name = newName
+		//}
 		return manager.TableSpec().Insert(ctx, &instanceSnapshot)
 	}()
 	if err != nil {
@@ -712,9 +717,8 @@ func (ism *SInstanceSnapshotManager) InitializeData() error {
 		if err != nil {
 			return errors.Wrapf(err, "unable to GetGuest for isp %q", isp.GetId())
 		} else {
-			host, _ := guest.GetHost()
-			zone, _ := host.GetZone()
-			cloudregionId = zone.CloudregionId
+			region, _ := guest.getRegion()
+			cloudregionId = region.Id
 		}
 		_, err = db.Update(isp, func() error {
 			isp.CloudregionId = cloudregionId

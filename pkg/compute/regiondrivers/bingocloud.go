@@ -37,7 +37,7 @@ func (self *SBingoCloudRegionDriver) GetProvider() string {
 }
 
 func (self *SBingoCloudRegionDriver) IsAllowSecurityGroupNameRepeat() bool {
-	return false
+	return true
 }
 
 func (self *SBingoCloudRegionDriver) GenerateSecurityGroupName(name string) string {
@@ -48,6 +48,10 @@ func (self *SBingoCloudRegionDriver) GenerateSecurityGroupName(name string) stri
 }
 
 func (self *SBingoCloudRegionDriver) IsSecurityGroupBelongVpc() bool {
+	return false
+}
+
+func (self *SBingoCloudRegionDriver) IsSecurityGroupBelongGlobalVpc() bool {
 	return false
 }
 

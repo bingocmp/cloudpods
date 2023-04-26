@@ -264,7 +264,7 @@ func (self *SBaseRegionDriver) GetSecurityGroupVpcId(ctx context.Context, userCr
 	return "", errors.Wrapf(cloudprovider.ErrNotImplemented, "GetSecurityGroupVpcId")
 }
 
-func (self *SBaseRegionDriver) RequestSyncSecurityGroup(ctx context.Context, userCred mcclient.TokenCredential, vpcId string, vpc *models.SVpc, secgroup *models.SSecurityGroup, removeProjectId, service string) (string, error) {
+func (self *SBaseRegionDriver) RequestSyncSecurityGroup(ctx context.Context, userCred mcclient.TokenCredential, managerId, vpcId string, vpc *models.SVpc, secgroup *models.SSecurityGroup, removeProjectId, service string) (string, error) {
 	return "", errors.Wrapf(cloudprovider.ErrNotImplemented, "RequestSyncSecurityGroup")
 }
 

@@ -114,6 +114,10 @@ func (self *DiskBatchCreateTask) OnScheduleFailCallback(ctx context.Context, obj
 func (self *DiskBatchCreateTask) SaveScheduleResult(ctx context.Context, obj IScheduleModel, candidate *schedapi.CandidateResource) {
 	var err error
 	disk := obj.(*models.SDisk)
+
+	managerId, _ := self.Params.GetString("prefer_manager_id")
+	disk.SetManagerId(self.UserCred, managerId)
+
 	// pendingUsage := models.SQuota{}
 	// err = self.GetPendingUsage(&pendingUsage, 0)
 	// if err != nil {

@@ -275,7 +275,10 @@ func (manager *SVpcManager) getVpcExternalIdForClassicNetwork(regionId, cloudpro
 func (manager *SVpcManager) GetOrCreateVpcForClassicNetwork(ctx context.Context, cloudprovider *SCloudprovider, region *SCloudregion) (*SVpc, error) {
 	externalId := manager.getVpcExternalIdForClassicNetwork(region.Id, cloudprovider.Id)
 	_vpc, err := db.FetchByExternalIdAndManagerId(manager, externalId, func(q *sqlchemy.SQuery) *sqlchemy.SQuery {
-		return q.Equals("manager_id", cloudprovider.Id)
+		return q.Filter(sqlchemy.OR(
+			sqlchemy.Equals(q.Field("manager_id"), cloudprovider.Id),
+			sqlchemy.Equals(q.Field("manager_id"), cloudprovider.getManagerProvider().Id),
+		))
 	})
 	if err == nil {
 		return _vpc.(*SVpc), nil
@@ -607,7 +610,12 @@ func (self *SVpc) syncRemoveCloudVpc(ctx context.Context, userCred mcclient.Toke
 		return nil
 	}
 
-	err := self.ValidateDeleteCondition(ctx, nil)
+	networks, err := self.GetNetworks()
+	for _, network := range networks {
+		network.RealDelete(ctx, userCred)
+	}
+
+	err = self.ValidateDeleteCondition(ctx, nil)
 	if err != nil { // cannot delete
 		self.markAllNetworksUnknown(userCred)
 		_, err = self.PerformDisable(ctx, userCred, nil, apis.PerformDisableInput{})
@@ -629,16 +637,18 @@ func (self *SVpc) syncRemoveCloudVpc(ctx context.Context, userCred mcclient.Toke
 func (self *SVpc) SyncWithCloudVpc(ctx context.Context, userCred mcclient.TokenCredential, extVPC cloudprovider.ICloudVpc, provider *SCloudprovider) error {
 	diff, err := db.UpdateWithLock(ctx, self, func() error {
 		if options.Options.EnableSyncName {
-			newName, _ := db.GenerateAlterName(self, extVPC.GetName())
-			if len(newName) > 0 {
-				self.Name = newName
-			}
+			//newName, _ := db.GenerateAlterName(self, extVPC.GetName())
+			//if len(newName) > 0 {
+			//	self.Name = newName
+			//}
+			self.Name = extVPC.GetName()
 		}
 		self.Status = extVPC.GetStatus()
 		self.CidrBlock = extVPC.GetCidrBlock()
 		self.IsDefault = extVPC.GetIsDefault()
 		self.ExternalId = extVPC.GetGlobalId()
 
+		self.IsPublic = extVPC.IsPublic()
 		self.IsEmulated = extVPC.IsEmulated()
 		self.ExternalAccessMode = extVPC.GetExternalAccessMode()
 
@@ -670,7 +680,9 @@ func (self *SVpc) SyncWithCloudVpc(ctx context.Context, userCred mcclient.TokenC
 
 	if provider != nil {
 		SyncCloudDomain(userCred, self, provider.GetOwnerId())
-		self.SyncShareState(ctx, userCred, provider.getAccountShareInfo())
+		if !self.IsPublic {
+			self.SyncShareState(ctx, userCred, provider.getAccountShareInfo())
+		}
 	}
 
 	db.OpsLog.LogSyncUpdate(self, diff, userCred)
@@ -689,6 +701,7 @@ func (manager *SVpcManager) newFromCloudVpc(ctx context.Context, userCred mcclie
 	vpc.ExternalAccessMode = extVPC.GetExternalAccessMode()
 	vpc.CloudregionId = region.Id
 	vpc.ManagerId = provider.Id
+	vpc.IsPublic = extVPC.IsPublic()
 	if createdAt := extVPC.GetCreatedAt(); !createdAt.IsZero() {
 		vpc.CreatedAt = createdAt
 	}
@@ -709,11 +722,12 @@ func (manager *SVpcManager) newFromCloudVpc(ctx context.Context, userCred mcclie
 		lockman.LockRawObject(ctx, manager.Keyword(), "name")
 		defer lockman.ReleaseRawObject(ctx, manager.Keyword(), "name")
 
-		newName, err := db.GenerateName(ctx, manager, userCred, extVPC.GetName())
-		if err != nil {
-			return err
-		}
-		vpc.Name = newName
+		//newName, err := db.GenerateName(ctx, manager, userCred, extVPC.GetName())
+		//if err != nil {
+		//	return err
+		//}
+		//vpc.Name = newName
+		vpc.Name = extVPC.GetName()
 
 		return manager.TableSpec().Insert(ctx, &vpc)
 	}()
@@ -877,7 +891,8 @@ func (manager *SVpcManager) ValidateCreateData(
 	}
 	region := regionObj.(*SCloudregion)
 	if region.isManaged() {
-		if len(region.ManagerId) > 0 {
+		// 不指定云订阅就使用region的
+		if len(region.ManagerId) > 0 && len(input.CloudproviderId) == 0 {
 			input.CloudproviderId = region.ManagerId
 		}
 		_, err := validators.ValidateModel(userCred, CloudproviderManager, &input.CloudproviderId)
@@ -1137,11 +1152,6 @@ func (manager *SVpcManager) ListItemFilter(
 		return nil, errors.Wrap(err, "SExternalizedResourceBaseManager.ListItemFilter")
 	}
 
-	q, err = manager.SManagedResourceBaseManager.ListItemFilter(ctx, q, userCred, query.ManagedResourceListInput)
-	if err != nil {
-		return nil, errors.Wrap(err, "SManagedResourceBaseManager.ListItemFilter")
-	}
-
 	q, err = manager.SCloudregionResourceBaseManager.ListItemFilter(ctx, q, userCred, query.RegionalFilterListInput)
 	if err != nil {
 		return nil, errors.Wrap(err, "SCloudregionResourceBaseManager.ListItemFilter")
@@ -1154,6 +1164,18 @@ func (manager *SVpcManager) ListItemFilter(
 
 	if len(query.ExternalAccessMode) > 0 {
 		q = q.Equals("external_access_mode", query.ExternalAccessMode)
+	}
+
+	if query.ProjectId != "" {
+		pm := CloudproviderManager.Query().SubQuery()
+		sq := pm.Query(pm.Field("id"))
+		sq = sq.Equals("tenant_id", query.ProjectId)
+		q = q.In("manager_id", sq.SubQuery())
+	} else if query.ManagedResourceListInput.CloudproviderId != "" {
+		q = q.Filter(sqlchemy.OR(
+			sqlchemy.Equals(q.Field("manager_id"), query.ManagedResourceListInput.CloudproviderId),
+			sqlchemy.IsTrue(q.Field("is_public")),
+		))
 	}
 
 	if len(query.DnsZoneId) > 0 {
@@ -1270,6 +1292,42 @@ func (manager *SVpcManager) ListItemFilter(
 	}
 	if len(query.CidrBlock) > 0 {
 		q = q.In("cidr_block", query.CidrBlock)
+	}
+
+	cloudEnvStr := query.CloudEnv
+	if cloudEnvStr == api.CLOUD_ENV_PUBLIC_CLOUD {
+		pm := CloudproviderManager.Query().SubQuery()
+		sq := pm.Query(pm.Field("id"))
+		sq = sq.In("provider", cloudprovider.GetPublicProviders())
+		q = q.In("manager_id", sq.SubQuery())
+	}
+
+	if cloudEnvStr == api.CLOUD_ENV_PRIVATE_CLOUD {
+		pm := CloudproviderManager.Query().SubQuery()
+		sq := pm.Query(pm.Field("id"))
+		sq = sq.In("provider", cloudprovider.GetPrivateProviders())
+		q = q.In("manager_id", sq.SubQuery())
+	}
+
+	if cloudEnvStr == api.CLOUD_ENV_ON_PREMISE {
+		pm := CloudproviderManager.Query().SubQuery()
+		sq := pm.Query(pm.Field("id"))
+		sq = sq.Filter(sqlchemy.OR(
+			sqlchemy.In(sq.Field("provider"), cloudprovider.GetOnPremiseProviders()),
+			sqlchemy.Equals(sq.Field("provider"), api.CLOUD_PROVIDER_ONECLOUD),
+		))
+		q = q.In("manager_id", sq.SubQuery())
+	}
+
+	if cloudEnvStr == api.CLOUD_ENV_PRIVATE_ON_PREMISE {
+		pm := CloudproviderManager.Query().SubQuery()
+		sq := pm.Query(pm.Field("id"))
+		sq = sq.Filter(sqlchemy.OR(
+			sqlchemy.In(sq.Field("provider"), cloudprovider.GetPrivateProviders()),
+			sqlchemy.In(sq.Field("provider"), cloudprovider.GetOnPremiseProviders()),
+			sqlchemy.Equals(sq.Field("provider"), api.CLOUD_PROVIDER_ONECLOUD),
+		))
+		q = q.In("manager_id", sq.SubQuery())
 	}
 
 	return q, nil

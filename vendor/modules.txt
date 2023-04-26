@@ -1614,3 +1614,4 @@ yunion.io/x/sqlchemy/backends/sqlite
 ## explicit; go 1.12
 yunion.io/x/structarg
 # github.com/jaypipes/ghw => github.com/wanyaoqi/ghw v0.10.1
+# yunion.io/x/cloudmux => /home/ericlee/Projects/bingo-stack/yunion/cloudmux

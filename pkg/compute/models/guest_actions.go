@@ -2559,10 +2559,18 @@ func (self *SGuest) PerformChangeConfig(ctx context.Context, userCred mcclient.T
 		return nil, errors.Wrapf(err, "GetHost")
 	}
 
+	zone, err := self.getZone()
+	if err != nil {
+		return nil, errors.Wrapf(err, "GetZone")
+	}
+
 	var addCpu, addMem int
 	var cpuChanged, memChanged bool
 
 	confs := jsonutils.NewDict()
+	confs.Add(jsonutils.NewString(self.ManagerId), "prefer_manager_id")
+	confs.Add(jsonutils.NewString(zone.ExternalId), "prefer_zone_id")
+
 	confs.Add(jsonutils.Marshal(map[string]interface{}{
 		"instance_type": self.InstanceType,
 		"vcpu_count":    self.VcpuCount,
@@ -4768,6 +4776,7 @@ func (manager *SGuestManager) StartHostGuestsMigrateTask(
 var supportInstanceSnapshotHypervisors = []string{
 	api.HYPERVISOR_KVM,
 	api.HYPERVISOR_ESXI,
+	api.HYPERVISOR_BINGO_CLOUD,
 }
 
 func (self *SGuest) validateCreateInstanceSnapshot(
@@ -4847,7 +4856,7 @@ func (self *SGuest) validateCreateInstanceBackup(
 	query jsonutils.JSONObject,
 	data jsonutils.JSONObject,
 ) error {
-	if !utils.IsInStringArray(self.Hypervisor, []string{api.HYPERVISOR_KVM}) {
+	if !utils.IsInStringArray(self.Hypervisor, []string{api.HYPERVISOR_KVM, api.HYPERVISOR_BINGO_CLOUD}) {
 		return httperrors.NewBadRequestError("guest hypervisor %s can't create instance snapshot", self.Hypervisor)
 	}
 

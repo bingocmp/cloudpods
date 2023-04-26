@@ -42,7 +42,6 @@ import (
 	"yunion.io/x/onecloud/pkg/cloudcommon/notifyclient"
 	"yunion.io/x/onecloud/pkg/cloudcommon/policy"
 	"yunion.io/x/onecloud/pkg/cloudcommon/validators"
-	"yunion.io/x/onecloud/pkg/compute/options"
 	"yunion.io/x/onecloud/pkg/httperrors"
 	"yunion.io/x/onecloud/pkg/mcclient"
 	"yunion.io/x/onecloud/pkg/util/rbacutils"
@@ -427,7 +426,7 @@ func (manager *SElasticipManager) SyncEips(
 	}
 	if !xor {
 		for i := 0; i < len(commondb); i += 1 {
-			err = commondb[i].SyncWithCloudEip(ctx, userCred, provider, commonext[i], syncOwnerId)
+			err = commondb[i].SyncWithCloudEip(ctx, userCred, provider, commonext[i])
 			if err != nil {
 				syncResult.UpdateError(err)
 				continue
@@ -436,7 +435,7 @@ func (manager *SElasticipManager) SyncEips(
 		}
 	}
 	for i := 0; i < len(added); i += 1 {
-		_, err := manager.newFromCloudEip(ctx, userCred, added[i], provider, region, syncOwnerId)
+		_, err := manager.newFromCloudEip(ctx, userCred, added[i], provider, region)
 		if err != nil {
 			syncResult.AddError(err)
 		} else {
@@ -522,14 +521,15 @@ func (self *SElasticip) SyncInstanceWithCloudEip(ctx context.Context, userCred m
 	return nil
 }
 
-func (self *SElasticip) SyncWithCloudEip(ctx context.Context, userCred mcclient.TokenCredential, provider *SCloudprovider, ext cloudprovider.ICloudEIP, syncOwnerId mcclient.IIdentityProvider) error {
+func (self *SElasticip) SyncWithCloudEip(ctx context.Context, userCred mcclient.TokenCredential, provider *SCloudprovider, ext cloudprovider.ICloudEIP) error {
 	diff, err := db.UpdateWithLock(ctx, self, func() error {
-		if options.Options.EnableSyncName {
-			newName, _ := db.GenerateAlterName(self, ext.GetName())
-			if len(newName) > 0 {
-				self.Name = newName
-			}
-		}
+		//if options.Options.EnableSyncName {
+		//	newName, _ := db.GenerateAlterName(self, ext.GetName())
+		//	if len(newName) > 0 {
+		//		self.Name = newName
+		//	}
+		//}
+		self.Name = ext.GetName()
 		if bandwidth := ext.GetBandwidth(); bandwidth != 0 {
 			self.Bandwidth = bandwidth
 		}
@@ -581,13 +581,13 @@ func (self *SElasticip) SyncWithCloudEip(ctx context.Context, userCred mcclient.
 	if res := self.GetAssociateResource(); res != nil && len(res.GetOwnerId().GetProjectId()) > 0 {
 		self.SyncCloudProjectId(userCred, res.GetOwnerId())
 	} else {
-		SyncCloudProject(ctx, userCred, self, syncOwnerId, ext, self.ManagerId)
+		SyncCloudProject(ctx, userCred, self, provider.GetOwnerId(), ext, provider.Id)
 	}
 
 	return nil
 }
 
-func (manager *SElasticipManager) newFromCloudEip(ctx context.Context, userCred mcclient.TokenCredential, extEip cloudprovider.ICloudEIP, provider *SCloudprovider, region *SCloudregion, syncOwnerId mcclient.IIdentityProvider) (*SElasticip, error) {
+func (manager *SElasticipManager) newFromCloudEip(ctx context.Context, userCred mcclient.TokenCredential, extEip cloudprovider.ICloudEIP, provider *SCloudprovider, region *SCloudregion) (*SElasticip, error) {
 	eip := SElasticip{}
 	eip.SetModelManager(manager, &eip)
 
@@ -609,8 +609,7 @@ func (manager *SElasticipManager) newFromCloudEip(ctx context.Context, userCred 
 			wire := WireManager.Query().SubQuery()
 			vpc := VpcManager.Query().SubQuery()
 			return q.Join(wire, sqlchemy.Equals(wire.Field("id"), q.Field("wire_id"))).
-				Join(vpc, sqlchemy.Equals(vpc.Field("id"), wire.Field("vpc_id"))).
-				Filter(sqlchemy.Equals(vpc.Field("manager_id"), provider.Id))
+				Join(vpc, sqlchemy.Equals(vpc.Field("id"), wire.Field("vpc_id")))
 		})
 		if err != nil {
 			msg := fmt.Sprintf("failed to found network by externalId %s error: %v", networkId, err)
@@ -624,11 +623,11 @@ func (manager *SElasticipManager) newFromCloudEip(ctx context.Context, userCred 
 		lockman.LockRawObject(ctx, manager.Keyword(), "name")
 		defer lockman.ReleaseRawObject(ctx, manager.Keyword(), "name")
 
-		newName, err := db.GenerateName(ctx, manager, syncOwnerId, extEip.GetName())
-		if err != nil {
-			return err
-		}
-		eip.Name = newName
+		//newName, err := db.GenerateName(ctx, manager, provider.GetOwnerId(), extEip.GetName())
+		//if err != nil {
+		//	return err
+		//}
+		eip.Name = extEip.GetName()
 
 		return manager.TableSpec().Insert(ctx, &eip)
 	}()
@@ -646,7 +645,7 @@ func (manager *SElasticipManager) newFromCloudEip(ctx context.Context, userCred 
 	if res := eip.GetAssociateResource(); res != nil {
 		eip.SyncCloudProjectId(userCred, res.GetOwnerId())
 	} else {
-		SyncCloudProject(ctx, userCred, &eip, syncOwnerId, extEip, eip.ManagerId)
+		SyncCloudProject(ctx, userCred, &eip, provider.GetOwnerId(), extEip, provider.Id)
 	}
 
 	db.OpsLog.LogEvent(&eip, db.ACT_CREATE, eip.GetShortDesc(ctx), userCred)
@@ -946,10 +945,8 @@ func (self *SElasticip) AssociateNatGateway(ctx context.Context, userCred mcclie
 	return nil
 }
 
-func (manager *SElasticipManager) getEipByExtEip(ctx context.Context, userCred mcclient.TokenCredential, extEip cloudprovider.ICloudEIP, provider *SCloudprovider, region *SCloudregion, syncOwnerId mcclient.IIdentityProvider) (*SElasticip, error) {
-	eipObj, err := db.FetchByExternalIdAndManagerId(manager, extEip.GetGlobalId(), func(q *sqlchemy.SQuery) *sqlchemy.SQuery {
-		return q.Equals("manager_id", provider.Id)
-	})
+func (manager *SElasticipManager) getEipByExtEip(ctx context.Context, userCred mcclient.TokenCredential, extEip cloudprovider.ICloudEIP, provider *SCloudprovider, region *SCloudregion) (*SElasticip, error) {
+	eipObj, err := db.FetchByExternalId(manager, extEip.GetGlobalId())
 	if err == nil {
 		return eipObj.(*SElasticip), nil
 	}
@@ -958,7 +955,7 @@ func (manager *SElasticipManager) getEipByExtEip(ctx context.Context, userCred m
 		return nil, err
 	}
 
-	return manager.newFromCloudEip(ctx, userCred, extEip, provider, region, syncOwnerId)
+	return manager.newFromCloudEip(ctx, userCred, extEip, provider, region)
 }
 
 func (manager *SElasticipManager) ValidateCreateData(ctx context.Context, userCred mcclient.TokenCredential, ownerId mcclient.IIdentityProvider, query jsonutils.JSONObject, input api.SElasticipCreateInput) (api.SElasticipCreateInput, error) {

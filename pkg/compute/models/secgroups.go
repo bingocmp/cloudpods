@@ -166,7 +166,7 @@ func (manager *SSecurityGroupManager) ListItemFilter(
 
 		sq := caches.SubQuery()
 
-		q = q.Join(sq, sqlchemy.Equals(q.Field("id"), sq.Field("secgroup_id")))
+		q = q.LeftJoin(sq, sqlchemy.Equals(q.Field("id"), sq.Field("secgroup_id")))
 	}
 
 	// elastic cache
@@ -1179,10 +1179,11 @@ func (manager *SSecurityGroupManager) newFromCloudSecgroup(ctx context.Context, 
 		lockman.LockRawObject(ctx, manager.Keyword(), "name")
 		defer lockman.ReleaseRawObject(ctx, manager.Keyword(), "name")
 
-		secgroup.Name, err = db.GenerateName(ctx, manager, userCred, extSec.GetName())
-		if err != nil {
-			return errors.Wrapf(err, "db.GenerateName")
-		}
+		//secgroup.Name, err = db.GenerateName(ctx, manager, userCred, extSec.GetName())
+		//if err != nil {
+		//	return errors.Wrapf(err, "db.GenerateName")
+		//}
+		secgroup.Name = extSec.GetName()
 
 		return manager.TableSpec().Insert(ctx, &secgroup)
 	}()

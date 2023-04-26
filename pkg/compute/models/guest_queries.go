@@ -59,6 +59,19 @@ func (manager *SGuestManager) FetchCustomizeColumns(
 			EncryptedResourceDetails: encRows[i],
 		}
 		guest := objs[i].(*SGuest)
+
+		provider := guest.GetCloudprovider()
+		project := provider.getProject(ctx)
+
+		if project != nil && provider != nil {
+			rows[i].Manager = provider.Name
+			rows[i].ManagerId = provider.Id
+			rows[i].ManagerDomainId = project.DomainId
+			rows[i].ManagerDomain = project.Domain
+			rows[i].ManagerProjectId = project.Id
+			rows[i].ManagerProject = project.Name
+		}
+
 		guestIds[i] = guest.GetId()
 		guests[i] = *guest
 	}
