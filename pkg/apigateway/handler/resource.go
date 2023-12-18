@@ -479,6 +479,7 @@ func (f *ResourceHandlers) performActionHandler(ctx context.Context, w http.Resp
 
 	var obj jsonutils.JSONObject
 	var idlist []string
+	session.SetContext(context.WithValue(session.GetContext(), "query", req.query))
 	if module2, e := modulebase.GetModule(session, req.Action()); e == nil {
 		if jmod, e := modulebase.GetJointModule2(session, module, module2); e == nil {
 			if idlist = fetchIdList(ctx, query, w); idlist == nil {

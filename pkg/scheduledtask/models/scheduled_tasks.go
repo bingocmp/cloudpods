@@ -39,6 +39,7 @@ import (
 	"yunion.io/x/onecloud/pkg/mcclient/auth"
 	"yunion.io/x/onecloud/pkg/mcclient/modulebase"
 	"yunion.io/x/onecloud/pkg/mcclient/modules/compute"
+	"yunion.io/x/onecloud/pkg/mcclient/modules/generalservice"
 	"yunion.io/x/onecloud/pkg/mcclient/options"
 	sop "yunion.io/x/onecloud/pkg/scheduledtask/options"
 	"yunion.io/x/onecloud/pkg/util/logclient"
@@ -74,9 +75,11 @@ type SScheduledTask struct {
 
 	STimer
 
-	ResourceType string `width:"32" charset:"ascii" create:"required" list:"user" get:"user"`
-	Operation    string `width:"32" charset:"ascii" create:"required" list:"user" get:"user"`
-	LabelType    string `width:"4" charset:"ascii" create:"required" list:"user" get:"user"`
+	ResourceType  string               `width:"32" charset:"ascii" create:"required" list:"user" get:"user"`
+	ResourceId    string               `width:"32" nullable:"true" charset:"ascii" list:"user" get:"user"`
+	DefaultParams jsonutils.JSONObject `list:"user" get:"user"`
+	Operation     string               `width:"32" charset:"ascii" create:"required" list:"user" get:"user"`
+	LabelType     string               `width:"4" charset:"ascii" create:"required" list:"user" get:"user"`
 }
 
 func (stm *SScheduledTaskManager) ListItemFilter(ctx context.Context, q *sqlchemy.SQuery, userCred mcclient.TokenCredential, input api.ScheduledTaskListInput) (*sqlchemy.SQuery, error) {
@@ -166,10 +169,10 @@ func (stm *SScheduledTaskManager) ValidateCreateData(ctx context.Context, userCr
 	if !utils.IsInStringArray(input.ScheduledType, []string{api.ST_TYPE_TIMING, api.ST_TYPE_CYCLE}) {
 		return input, httperrors.NewInputParameterError("unkown scheduled type '%s'", input.ScheduledType)
 	}
-	if !utils.IsInStringArray(input.ResourceType, []string{api.ST_RESOURCE_SERVER, api.ST_RESOURCE_CLOUDACCOUNT}) {
+	if !utils.IsInStringArray(input.ResourceType, []string{api.ST_RESOURCE_SERVER, api.ST_RESOURCE_CLOUDACCOUNT, api.ST_RESOURCE_GENERALSERVICE}) {
 		return input, httperrors.NewInputParameterError("unkown resource type '%s'", input.ResourceType)
 	}
-	if !utils.IsInStringArray(input.Operation, []string{api.ST_RESOURCE_OPERATION_RESTART, api.ST_RESOURCE_OPERATION_STOP, api.ST_RESOURCE_OPERATION_START, api.ST_RESOURCE_OPERATION_SYNC}) {
+	if !utils.IsInStringArray(input.Operation, []string{api.ST_RESOURCE_OPERATION_RESTART, api.ST_RESOURCE_OPERATION_STOP, api.ST_RESOURCE_OPERATION_START, api.ST_RESOURCE_OPERATION_SYNC, api.ST_RESOURCE_OPERATION_OPERATE}) {
 		return input, httperrors.NewInputParameterError("unkown resource operation '%s'", input.Operation)
 	}
 	if !utils.IsInStringArray(input.LabelType, []string{api.ST_LABEL_ID, api.ST_LABEL_TAG}) {
@@ -252,6 +255,8 @@ func (st *SScheduledTask) PostCreate(ctx context.Context, userCred mcclient.Toke
 	st.Update(time.Time{})
 	st.Status = api.ST_STATUS_READY
 	st.Enabled = tristate.True
+	st.ResourceId = input.ResourceId
+	st.DefaultParams = input.DefaultParams
 	// st.TimerDesc = st.Description(ctx)
 	err = st.GetModelManager().TableSpec().InsertOrUpdate(ctx, st)
 	if err != nil {
@@ -421,27 +426,46 @@ func (st *SScheduledTask) Execute(ctx context.Context, userCred mcclient.TokenCr
 		opts  options.BaseListOptions
 		f     bool
 		limit int
+		res   map[string]string
+		ret   jsonutils.JSONObject
 	)
-	switch st.LabelType {
-	case api.ST_LABEL_TAG:
-		opts = options.BaseListOptions{
-			Details: &f,
-			Limit:   &limit,
-			Scope:   "system",
-			Tags:    labels,
+	switch st.ResourceType {
+	case api.ST_RESOURCE_GENERALSERVICE:
+		{
+			params := jsonutils.NewDict()
+			params.Set("id", jsonutils.NewString(labels[0]))
+			ret, err = action.PerformAction(params, st.ResourceId, "get")
+			if err != nil {
+				return err
+			}
+			name, _ := ret.GetString("name")
+			res = map[string]string{labels[0]: name}
 		}
-	case api.ST_LABEL_ID:
-		opts = options.BaseListOptions{
-			Details: &f,
-			Limit:   &limit,
-			Scope:   "system",
-			Filter:  []string{fmt.Sprintf("id.in(%s)", strings.Join(labels, ","))},
+	default:
+		{
+			switch st.LabelType {
+			case api.ST_LABEL_TAG:
+				opts = options.BaseListOptions{
+					Details: &f,
+					Limit:   &limit,
+					Scope:   "system",
+					Tags:    labels,
+				}
+			case api.ST_LABEL_ID:
+				opts = options.BaseListOptions{
+					Details: &f,
+					Limit:   &limit,
+					Scope:   "system",
+					Filter:  []string{fmt.Sprintf("id.in(%s)", strings.Join(labels, ","))},
+				}
+			}
+			res, err = action.List(&WrapperListOptions{opts})
+			if err != nil {
+				return err
+			}
 		}
 	}
-	res, err := action.List(&WrapperListOptions{opts})
-	if err != nil {
-		return err
-	}
+
 	for id := range res {
 		ids = append(ids, id)
 	}
@@ -455,17 +479,38 @@ func (st *SScheduledTask) Execute(ctx context.Context, userCred mcclient.TokenCr
 	workerQueue := make(chan struct{}, maxLimit)
 	results := make([]result, len(ids))
 	log.Infof("servers to scheduledtask: %v", ids)
+
 	for i, id := range ids {
 		workerQueue <- struct{}{}
-		go func(n int, id string) {
-			ok, reason := action.Apply(id)
+		go func(n int, id, res string, ret jsonutils.JSONObject, st *SScheduledTask) {
+			//TODO 暂时在这里处理
+			var ok bool
+			var reason string
+			if st.ResourceType == api.ST_RESOURCE_GENERALSERVICE {
+				action.operation.Params.Set("id", jsonutils.NewString(id))
+				if ret != nil {
+					resParams, _ := ret.GetMap()
+					for k, v := range resParams {
+						action.operation.Params.Set(k, v)
+					}
+				}
+				if st.DefaultParams != nil {
+					defaultParams, _ := st.DefaultParams.GetMap()
+					for k, v := range defaultParams {
+						action.operation.Params.Set(k, v)
+					}
+				}
+				ok, reason = action.Apply(st.ResourceId)
+			} else {
+				ok, reason = action.Apply(id)
+			}
 			log.Infof("exec successfully: %t, reason: %s", ok, reason)
 			if ok {
-				st.ExecuteNotify(ctx, userCred, res[id])
+				st.ExecuteNotify(ctx, userCred, res)
 			}
 			results[n] = result{id, ok, reason}
 			<-workerQueue
-		}(i, id)
+		}(i, id, res[id], ret, st)
 	}
 	// wait all finish
 	for i := 0; i < maxLimit; i++ {
@@ -544,14 +589,14 @@ func (stm *SScheduledTaskManager) Timer(ctx context.Context, userCred mcclient.T
 	// 60 is for fault tolerance
 	interval := 60 + 30
 	timeScope := stm.timeScope(time.Now(), time.Duration(interval)*time.Second)
-	q := stm.Query().Equals("status", api.ST_STATUS_READY).Equals("enabled", true).LT("next_time", timeScope.End).IsFalse("is_expired")
+	q := stm.Query().Equals("status", api.ST_STATUS_READY).Equals("enabled", true).LT("next_time", timeScope.End.Format("2006-01-02 15:04:05")).IsFalse("is_expired")
 	sts := make([]SScheduledTask, 0, 5)
 	err := db.FetchModelObjects(stm, q, &sts)
 	if err != nil {
 		log.Errorf("db.FetchModelObjects error: %s", err.Error())
 		return
 	}
-	log.Debugf("timeScope: start: %s, end: %s", timeScope.Start, timeScope.End)
+	log.Debugf("timeScope: start: %s, end: %s, tasks: %d", timeScope.Start, timeScope.End, len(sts))
 	waitQueue := make(chan struct{}, len(sts))
 	for i := range sts {
 		log.Infof("sts[%d]: %s", i, jsonutils.Marshal(sts[i]))
@@ -605,6 +650,7 @@ func (stm *SScheduledTaskManager) Timer(ctx context.Context, userCred mcclient.T
 func init() {
 	Register(ResourceServer, compute.Servers.ResourceManager)
 	Register(ResourceCloudAccount, compute.Cloudaccounts)
+	Register(ResourceGeneralService, generalservice.GeneralServiceManager)
 }
 
 // Modules describe the correspondence between Resource and modulebase.ResourceManager,
@@ -620,8 +666,9 @@ func Register(resource Resource, manager modulebase.ResourceManager) {
 type Resource string
 
 const (
-	ResourceServer       Resource = api.ST_RESOURCE_SERVER
-	ResourceCloudAccount Resource = api.ST_RESOURCE_CLOUDACCOUNT
+	ResourceServer         Resource = api.ST_RESOURCE_SERVER
+	ResourceCloudAccount   Resource = api.ST_RESOURCE_CLOUDACCOUNT
+	ResourceGeneralService Resource = api.ST_RESOURCE_GENERALSERVICE
 )
 
 // ResourceOperation describe the operation for onecloud resource like create, update, delete and so on.
@@ -673,20 +720,27 @@ func init() {
 		Operation: api.ST_RESOURCE_OPERATION_SYNC,
 		Params:    paramsAccoutSync,
 	}
+	GeneralServiceOperate = ResourceOperation{
+		Resource:  ResourceGeneralService,
+		Operation: api.ST_RESOURCE_OPERATION_OPERATE,
+		Params:    jsonutils.NewDict(),
+	}
 	ResourceOperationMap = map[string]ResourceOperation{
-		fmt.Sprintf("%s.%s", ResourceServer, api.ST_RESOURCE_OPERATION_START):      ServerStart,
-		fmt.Sprintf("%s.%s", ResourceServer, api.ST_RESOURCE_OPERATION_STOP):       ServerStop,
-		fmt.Sprintf("%s.%s", ResourceServer, api.ST_RESOURCE_OPERATION_RESTART):    ServerRestart,
-		fmt.Sprintf("%s.%s", ResourceCloudAccount, api.ST_RESOURCE_OPERATION_SYNC): CloudAccountSync,
+		fmt.Sprintf("%s.%s", ResourceServer, api.ST_RESOURCE_OPERATION_START):           ServerStart,
+		fmt.Sprintf("%s.%s", ResourceServer, api.ST_RESOURCE_OPERATION_STOP):            ServerStop,
+		fmt.Sprintf("%s.%s", ResourceServer, api.ST_RESOURCE_OPERATION_RESTART):         ServerRestart,
+		fmt.Sprintf("%s.%s", ResourceCloudAccount, api.ST_RESOURCE_OPERATION_SYNC):      CloudAccountSync,
+		fmt.Sprintf("%s.%s", ResourceGeneralService, api.ST_RESOURCE_OPERATION_OPERATE): GeneralServiceOperate,
 	}
 }
 
 var (
-	ServerStart          ResourceOperation
-	ServerStop           ResourceOperation
-	ServerRestart        ResourceOperation
-	CloudAccountSync     ResourceOperation
-	ResourceOperationMap map[string]ResourceOperation
+	ServerStart           ResourceOperation
+	ServerStop            ResourceOperation
+	ServerRestart         ResourceOperation
+	CloudAccountSync      ResourceOperation
+	ResourceOperationMap  map[string]ResourceOperation
+	GeneralServiceOperate ResourceOperation
 )
 
 // Action itself is meaningless, a meaningful Action is generated by
@@ -742,6 +796,18 @@ func (r SAction) List(opts *WrapperListOptions) (map[string]string, error) {
 		out[id] = name
 	}
 	return out, nil
+}
+
+func (r SAction) PerformAction(params jsonutils.JSONObject, id, action string) (jsonutils.JSONObject, error) {
+	resourceManager, ok := Modules[r.operation.Resource]
+	if !ok {
+		return nil, errors.Errorf("no such resource '%s' in Modules", r.operation.Resource)
+	}
+	ret, err := resourceManager.PerformAction(r.session, id, action, params)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
 func (r SAction) Apply(id string) (success bool, failReason string) {

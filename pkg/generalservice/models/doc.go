@@ -12,4 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cloudnet // import "yunion.io/x/onecloud/pkg/mcclient/options/cloudnet"
+package models // import "yunion.io/x/onecloud/pkg/generalservice/models"

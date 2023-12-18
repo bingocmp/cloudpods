@@ -23,6 +23,7 @@ import (
 	modules "yunion.io/x/onecloud/pkg/mcclient/modules/compute"
 	_ "yunion.io/x/onecloud/pkg/mcclient/modules/devtool"
 	_ "yunion.io/x/onecloud/pkg/mcclient/modules/etcd"
+	_ "yunion.io/x/onecloud/pkg/mcclient/modules/generalservice"
 	_ "yunion.io/x/onecloud/pkg/mcclient/modules/identity"
 	_ "yunion.io/x/onecloud/pkg/mcclient/modules/image"
 	"yunion.io/x/onecloud/pkg/mcclient/modules/k8s"
