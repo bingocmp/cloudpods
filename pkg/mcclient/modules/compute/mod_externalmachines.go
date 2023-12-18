@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ansible
+package compute
 
 import (
 	"yunion.io/x/onecloud/pkg/mcclient/modulebase"
@@ -20,35 +20,15 @@ import (
 )
 
 var (
-	AnsiblePlaybookReference modulebase.ResourceManager
-	AnsiblePlaybookInstance  modulebase.ResourceManager
+	ExternalMachines modulebase.ResourceManager
 )
 
 func init() {
-	AnsiblePlaybookReference = modules.NewAnsibleManager(
-		"ansibleplaybookreference",
-		"ansibleplaybookreferences",
-		[]string{
-			"Id",
-			"Name",
-			"Playbook_Path",
-			"Default_Params",
-			"Method",
-		},
-		[]string{},
-	)
-	AnsiblePlaybookInstance = modules.NewAnsibleManager(
-		"ansibleplaybookinstance",
-		"ansibleplaybookinstances",
-		[]string{
-			"Id",
-			"Status",
-			"Start_Time",
-			"End_Time",
-			"Output",
-		},
-		[]string{},
-	)
-	modules.Register(&AnsiblePlaybookReference)
-	modules.Register(&AnsiblePlaybookInstance)
+	ExternalMachines = modules.NewComputeManager(
+		"externalmachine",
+		"externalmachines",
+		[]string{"ID", "Name", "External_Id", "Tenant_id", "Tenant", "Manager_id", "Manager"},
+		[]string{})
+
+	modules.RegisterCompute(&ExternalMachines)
 }

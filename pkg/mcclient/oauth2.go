@@ -28,6 +28,15 @@ func (this *Client) AuthenticateOAuth2(idpId, code string, projectId, projectNam
 	return this.authenticateOAuth2WithContext(idpId, code, projectId, projectName, projectDomain, aCtx)
 }
 
+func (this *Client) AuthenticateOAuth2WithID(idpId, code, projectId, domainId string, cliIp string) (TokenCredential, error) {
+	aCtx := SAuthContext{
+		// OAuth2 auth must comes from Web
+		Source: AuthSourceWeb,
+		Ip:     cliIp,
+	}
+	return this.authenticateOAuth2WithContext2(idpId, code, projectId, domainId, aCtx)
+}
+
 func (this *Client) authenticateOAuth2WithContext(idpId, code string, projectId, projectName, projectDomain string, aCtx SAuthContext) (TokenCredential, error) {
 	if this.AuthVersion() != "v3" {
 		return nil, httperrors.ErrNotSupported
@@ -44,6 +53,24 @@ func (this *Client) authenticateOAuth2WithContext(idpId, code string, projectId,
 		if len(projectDomain) > 0 {
 			input.Auth.Scope.Project.Domain.Name = projectDomain
 		}
+	}
+	input.Auth.Context = aCtx
+	return this._authV3Input(input)
+}
+
+func (this *Client) authenticateOAuth2WithContext2(idpId, code, projectId, domainId string, aCtx SAuthContext) (TokenCredential, error) {
+	if this.AuthVersion() != "v3" {
+		return nil, httperrors.ErrNotSupported
+	}
+	input := SAuthenticationInputV3{}
+	input.Auth.Identity.Methods = []string{api.AUTH_METHOD_OAuth2}
+	input.Auth.Identity.Id = idpId
+	input.Auth.Identity.OAuth2.Code = code
+	if len(projectId) > 0 {
+		input.Auth.Scope.Project.Id = projectId
+	}
+	if len(domainId) > 0 {
+		input.Auth.Scope.Domain.Id = domainId
 	}
 	input.Auth.Context = aCtx
 	return this._authV3Input(input)

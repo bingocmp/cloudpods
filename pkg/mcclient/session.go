@@ -450,6 +450,10 @@ func (cs *ClientSession) GetToken() TokenCredential {
 	return cs.token
 }
 
+func (cs *ClientSession) SetContext(ctx context.Context) {
+	cs.ctx = ctx
+}
+
 func (cs *ClientSession) GetContext() context.Context {
 	if cs.ctx == nil {
 		return context.Background()

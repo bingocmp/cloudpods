@@ -505,6 +505,15 @@ func (this *ResourceManager) PerformActionInContext(session *mcclient.ClientSess
 
 func (this *ResourceManager) PerformActionInContexts(session *mcclient.ClientSession, id string, action string, params jsonutils.JSONObject, ctxs []ManagerContext) (jsonutils.JSONObject, error) {
 	path := fmt.Sprintf("/%s/%s/%s", this.ContextPath(ctxs), url.PathEscape(id), url.PathEscape(action))
+
+	ctx := session.GetContext()
+	if query := ctx.Value("query"); query != nil {
+		qs := query.(jsonutils.JSONObject).QueryString()
+		if len(qs) > 0 {
+			path = fmt.Sprintf("%s?%s", path, qs)
+		}
+	}
+
 	result, err := this._post(session, path, this.params2Body(session, params, this.Keyword), this.Keyword)
 	if err != nil {
 		return nil, err
